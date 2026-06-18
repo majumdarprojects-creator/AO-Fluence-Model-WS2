@@ -1,0 +1,364 @@
+#Disclaimer: AI was used to debug and interpret syntax
+#All methods used were researched thoroughly by the creator.
+
+from astropy import units as u
+from poliastro.bodies import Earth, Sun
+from poliastro.twobody import Orbit
+from astropy.time import Time
+from poliastro.plotting import OrbitPlotter3D
+import numpy as np
+from astropy.coordinates import (
+    GCRS,
+    ITRS,
+    CartesianRepresentation,
+    CartesianDifferential
+)
+import math
+from scipy.special import erf
+import pymsis
+from pymsis import msis
+import matplotlib.pyplot as plt
+
+
+
+epoch = Time("2025-12-01 00:00:00", scale="utc")
+
+# Orbital Parameters.
+# Semi-Major Axis: R of Earth + altitude of 230 km
+a = 6601 * u.km
+#Eccentricity: our orbit is approximately circular
+ecc = 0 * u.one
+#Inclination
+inc = 42.1 * u.deg
+#Right Angle Alignment Node
+raan = 0 * u.deg
+#
+argp = 0 * u.deg
+nu = 0 * u.deg
+
+orb = Orbit.from_classical(Earth, a, ecc, inc, raan, argp, nu, epoch=epoch)
+print(orb)
+orb.period.to(u.min)
+
+T_orb_s = orb.period.to(u.s).value
+
+num_orbits = 10
+
+t_end = num_orbits * T_orb_s
+
+dt = 30  # seconds
+
+times = np.linspace(0, t_end, int(t_end/dt) + 1) * u.s
+
+t0 = epoch
+times_time = t0 + times
+
+
+# for X in Y : for every individual X in list Y, do something. For here, for every timestamp in the time range, propogate (=simulate) the orbit at the time
+# States include both r and v when propogated
+# it appears r and v are internally saved, so the lack of s.r = ... and s.v = ... is justifiable
+
+states = [orb.propagate(t) for t in times]
+
+# X.Z for X in Y-> for every state X in Y, grab the current Z and pack it in a new list
+
+rs = [s.r for s in states]
+vs = [s.v for s in states]
+
+#Range generates a sequence of integers. range(5) -> (0,1,2,3,4) stops before 5
+# For i in range -> for every element in range, print the position and velocity at the time
+
+#The paper says we need GEI coordinate system, but Poliastro uses GCRS. However, GCRS and GEI are fundamentally similar, so we will not convert for this low-power estimate. If curious, the difference should be in the order of one arcsecond, which is negligible for this.
+
+
+gcrs_coords = []
+
+for s, t in zip(states, times_time):
+
+    rep = CartesianRepresentation(s.r[0], s.r[1], s.r[2])
+    diff = CartesianDifferential(s.v[0], s.v[1], s.v[2])
+
+    coord = GCRS(
+        rep.with_differentials(diff),
+        obstime=t
+    )
+
+    gcrs_coords.append(coord)
+
+#Append tags on each measured position state to gcrs_coords, creating a gradually growing list.
+#This is necessary because I do not think is there is a closed form function for position in this usage.
+
+
+#Conversion to GEO coordinate system, but again this paper is somewhat old, so our modern equivalent is ITRS coords
+
+itrs_coords = []
+
+for coord in gcrs_coords:
+# For every piece of info in the list of GCRS coordinates...
+
+    transformed = coord.transform_to(
+        ITRS(obstime=coord.obstime)
+    )
+
+    itrs_coords.append(transformed)
+
+#Convert to ITRS and add to a growin list of ITRS coordinates.
+
+
+# From my reference article: "However, the magnitude of the wind velocity is small in comparison to the other velocities in play (on theorder of 0.1 km/s), and thus only a marginally affects the magnitude of atomic oxygen flux"
+#So we will NOT try to incorporate it
+
+#Create the spin axis vector. We should simulate two cases: 1) Uniform Flux or 2) Maximum Erosion
+
+#CASE 1: Uniform Flux. For this, we must set up the spin axis vector such that 4 sides of the cube rotate a la spit roast style into the ram direction where particles impact from.
+
+#Making a large 2D array of all states of r and v
+
+r_GCRS_array = np.array(rs)
+v_GCRS_array = np.array(vs)
+
+# orbit normal (angular momentum direction)
+orbit_normal_vector_GCRS = np.cross(r_GCRS_array, v_GCRS_array)
+
+# magnitudes
+magnitudes = np.linalg.norm(orbit_normal_vector_GCRS, axis=1, keepdims=True)
+
+# normalized spin/orbit axis
+# Normalization is important because it removes all information about magnitude. We do not care about magnitude; we only care for how the direction between the spin axis and ram direction matters.
+
+spin_axis_GCRS_array_CASE1 = orbit_normal_vector_GCRS / magnitudes
+
+
+#CASE 2: Maximum Erosion. For this, we must set up the spin axis vector to always point in the same direction as the velocity vector (spinning like a bullet, so to speak), so one face is constantly in the ram direction and receiving the maximum AO Flux.
+
+velocity_magnitudes = np.linalg.norm(v_GCRS_array, axis=1, keepdims=True)
+
+spin_axis_GCRS_array_CASE2 = v_GCRS_array / velocity_magnitudes
+
+# Computing atmospheric corotational velocity. It is rather simple, as vco is simply = Earth spin vector (w_Earth) crossed with r of the spacecraft, in GCRS coords
+
+w_Earth = np.array([0,0,7.293e-5])
+
+v_corotational_GCRS = np.cross(w_Earth, r_GCRS_array)
+
+# FIX NOTE: Thermal velocity is now computed per-timestep inside the flux loop using the
+# local atmospheric temperature from MSIS (result[0, 10]). A fixed T_perigee constant
+# was previously used for all steps, which contradicts Section 2.1 and Step 9 of the paper.
+# The R_constant and atomic_mass are kept here for use inside the loop.
+
+R_constant = 8.314       # J/(mol·K)
+atomic_mass = 0.016      # kg/mol  (atomic oxygen, O)
+
+
+#Step 7 in Section 2.3.2.
+#Define the normal to the impact surface of interest.
+#Note: For case 1, it WOULD have been simpler and relatively accurate to divide the result of Case 2 by 4, as per a regular analytical approach
+#However, doing it via the paper's method is an interesting project, so we will do it that way.
+#A comparison will follow later between this "simple" method and the "faithful" method below.
+
+#Pick any spin axis vector. If you print spin_axis_GCRS_array_CASE1 in full, all vectors are the very similar (as they should be).
+#So picking [0] or [i] where i is anything doesn't really matter.
+
+s_CASE1 = spin_axis_GCRS_array_CASE1[0]
+
+# ref is an arbitrary anchor to start with that is perp. to s_CASE1
+ref = np.array([1, 0, 0])
+
+#Take an arbitrary direction, remove everything pointing along the spin axis, and keep only the perpendicular component so we get a valid side-face direction.
+n0 = ref - np.dot(ref, s_CASE1) * s_CASE1
+#Normalize
+n0_final = n0 / (np.linalg.norm(n0))
+
+#Now n0_final is a valid normal to the spin axis, which means in reality that it is normal to the impact of our interested surface, the rotating sides.
+#BUT this is only valid for the first spin axis, as shown by s_CASE1 = spin_axis_GCRS_array_CASE1[0]
+#Therefore, build n(t) such that it shows how n0 changes over time as the spacecraft rotates
+#From Ekansh's project:
+
+RPM_spin = 3
+
+P_spin = 60 / RPM_spin
+
+omega_spin = 2 * np.pi / P_spin
+
+#Second basis vector for building n(t). e2 is perp. to both s_CASE1 and n0_final
+e2 = np.cross(s_CASE1, n0_final)
+e2_final = e2 / np.linalg.norm(e2)
+
+
+surface_normals_CASE1 = []
+
+for t in times:
+
+    # convert orbital time to seconds (IMPORTANT)
+    t_sec = t.to(u.s).value
+
+    # spin angle
+    theta_spin = omega_spin * t_sec
+
+    # rotating normal
+    n_t = (
+        np.cos(theta_spin) * n0_final
+        + np.sin(theta_spin) * e2_final
+    )
+
+    surface_normals_CASE1.append(n_t)
+
+#Now using Rodrigues rotation formula to rotate where surface_normals_CASE1 is in the x-hat direction.
+#
+
+def rodrigues(k, theta):
+    k = k / np.linalg.norm(k)
+
+    K = np.array([
+        [0, -k[2], k[1]],
+        [k[2], 0, -k[0]],
+        [-k[1], k[0], 0]
+    ])
+
+    I = np.eye(3)
+
+    return I + np.sin(theta)*K + (1-np.cos(theta))*(K @ K)
+
+ex = np.array([1,0,0])
+
+v_drift_rotated_CASE1 = []
+
+for i in range(len(times)):
+
+    n = surface_normals_CASE1[i]
+    v_SC = vs[i].to(u.km/u.s).value
+    v_corot = v_corotational_GCRS[i]
+
+    # FIX: Sign correction per Equation 1 of the paper:
+    # v_ram = -v_sc + v_co + v_wind + u
+    # The drift velocity is v0 = -v_sc + v_co (wind omitted as per model scope).
+    # Previously this was (v_SC - v_corot), which had both signs flipped.
+    v_drift = -v_SC + v_corot
+
+    # angle between n and x-axis
+    cos_theta_rot = np.dot(n, ex)
+    cos_theta_rot = np.clip(cos_theta_rot, -1, 1)
+    theta_rot = np.arccos(cos_theta_rot)
+
+    k = np.cross(n, ex)
+    k_norm = np.linalg.norm(k)
+
+    if k_norm < 1e-10:
+        R = np.eye(3)
+    else:
+        k = k / k_norm
+        R = rodrigues(k, theta_rot)
+    # IMPORTANT: We use the transpose of the Rodrigues matrix because we are rotating the
+    # coordinate frame (so that n aligns with x̂), not rotating the vector itself.
+    # R rotates x̂ → n; R.T (the inverse) rotates the frame so that n → x̂.
+    v_drift_rot = R.T @ v_drift
+    v_drift_rotated_CASE1.append(v_drift_rot)
+
+#Calculation of ram velocity as per equations 11-14.
+# FIX: v_ram and s_parameter are now computed per-step inside the flux loop below,
+# using the local atmospheric temperature from MSIS at each orbital position.
+# Computing them once from a fixed T_perigee (as done previously) does not capture
+# the variation in thermal speed across the orbit (Section 2.1, Step 9 of paper).
+
+n_AO_list = []
+v_normal_list = []
+flux = []
+v_ram_list = []
+
+for i in range(len(times)):
+
+    # geometry already built
+    pymsis_coord = itrs_coords[i]
+
+    # MSIS atmospheric density AND temperature
+    result = msis.run(
+        dates=[pymsis_coord.obstime.datetime],
+        lons=[pymsis_coord.earth_location.lon.deg],
+        lats=[pymsis_coord.earth_location.lat.deg],
+        alts=[pymsis_coord.earth_location.height.to(u.km).value])
+
+    n_AO = result[0, 3]
+
+    # FIX: Use local atmospheric temperature from MSIS output (column index 10)
+    # rather than a fixed constant. This is consistent with Section 2.1 and Step 9.
+    T_local = result[0, 10]
+    if T_local <= 0 or np.isnan(T_local):
+        T_local = 1000.0   # fallback guard for unphysical MSIS edge cases
+
+    # Compute local mean thermal speed (m/s then convert to km/s)
+    u_mean_thermvel_mps = math.sqrt(
+        (8 * R_constant * T_local)
+        / (atomic_mass * math.pi)
+    )
+    u_mean_thermvel_kms = u_mean_thermvel_mps / 1000.0
+
+    # Normal component of the drift velocity (km/s) — already in rotated frame (x = normal dir)
+    v_normal_i = v_drift_rotated_CASE1[i][0]
+
+    # s parameter (Eq. 12)
+    s_i = (2 * v_normal_i) / (np.sqrt(np.pi) * u_mean_thermvel_kms)
+
+    # Ram velocity (Eq. 11)
+    bracket_i = (
+        s_i * np.sqrt(np.pi) * (erf(s_i) + 1)
+        + np.exp(-(s_i**2))
+    )
+    v_ram_i = (u_mean_thermvel_kms / 4) * bracket_i   # km/s
+
+    # Flux (Eq. 15): Γ = n_AO * v_ram
+    v_ram_ms = v_ram_i * 1000.0   # convert km/s → m/s
+    phi = n_AO * v_ram_ms
+
+    # Store results
+    n_AO_list.append(n_AO)
+    v_normal_list.append(v_normal_i)
+    flux.append(phi)
+    v_ram_list.append(v_ram_i)
+
+n_AO_array = np.array(n_AO_list)
+v_normal_array = np.array(v_normal_list)   # km/s
+flux_array = np.array(flux)
+v_ram_array = np.array(v_ram_list)
+
+dt = (times[1] - times[0]).to(u.s).value
+
+fluence = np.trapz(flux_array, dx=dt)
+fluence_cumulative = np.cumsum(flux_array * dt)
+
+t_plot = times.to(u.min).value
+
+print(f"Total AO Fluence (Case 1): {fluence:.3e} m^-2")
+
+#AO Density MSIS output
+
+plt.figure()
+plt.plot(t_plot, n_AO_array)
+plt.xlabel("Time (min)")
+plt.ylabel("n_AO (m⁻³)")
+plt.title("Atomic Oxygen Density Along Orbit")
+plt.show()
+
+#normal velocity (for geometry purposes)
+
+plt.figure()
+plt.plot(t_plot, v_normal_array)
+plt.xlabel("Time (min)")
+plt.ylabel("v_normal (km/s)")
+plt.title("Surface-Normal Component of Drift Velocity")
+plt.show()
+
+# Flux figure
+plt.figure()
+plt.plot(t_plot, flux_array)
+plt.xlabel("Time (min)")
+plt.ylabel("Flux (m⁻² s⁻¹)")
+plt.title("Atomic Oxygen Flux Along Orbit")
+plt.show()
+
+#Fluence cumulative over time (because "fluence" is just the final number, but we have to track it over time too)
+plt.figure()
+plt.plot(t_plot, fluence_cumulative)
+plt.xlabel("Time (min)")
+plt.ylabel("Fluence (m⁻²)")
+plt.title("Cumulative Atomic Oxygen Fluence")
+plt.show()
