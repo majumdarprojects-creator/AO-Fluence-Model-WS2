@@ -20,7 +20,7 @@ from pymsis import msis
 import matplotlib.pyplot as plt
 
 
-
+#WS-2 launches later than this, but databses quite literally do not have the data for our actual launch date. This is a stand in launch date.
 epoch = Time("2025-12-01 00:00:00", scale="utc")
 
 # Orbital Parameters.
@@ -272,7 +272,7 @@ for i in range(len(times)):
 
     # MSIS atmospheric density AND temperature
     # FIX: f107/f107a/ap are pinned explicitly rather than relying on pymsis's
-    # auto-download. The epoch (2025-12-01) is a future/synthetic date relative
+    # auto-download. The epoch (2027-12-01) is a future/synthetic date relative
     # to CelesTrak's observed F10.7/Ap archive, so auto-download has no real
     # observation to return and may silently fall back to climatological
     # defaults or an unrelated cached value -- either of which can swing the
