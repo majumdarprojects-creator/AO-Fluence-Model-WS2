@@ -271,12 +271,29 @@ for i in range(len(times)):
     pymsis_coord = itrs_coords[i]
 
     # MSIS atmospheric density AND temperature
+    # FIX: f107/f107a/ap are pinned explicitly rather than relying on pymsis's
+    # auto-download. The epoch (2025-12-01) is a future/synthetic date relative
+    # to CelesTrak's observed F10.7/Ap archive, so auto-download has no real
+    # observation to return and may silently fall back to climatological
+    # defaults or an unrelated cached value -- either of which can swing the
+    # AO density (and hence fluence) by a large factor, since AO production
+    # scales strongly with solar activity (paper Section 3.1.1).
+    # Values below correspond to moderate solar activity (F10.7 ~ 150 sfu,
+    # Ap ~ 15) -- adjust to whatever scenario you intend to model
+    # (e.g. solar min ~70, solar max ~200+).
+    F107_ASSUMED = 150.0
+    F107A_ASSUMED = 150.0
+    AP_ASSUMED = 15.0
+ 
     result = msis.run(
         dates=[pymsis_coord.obstime.datetime],
         lons=[pymsis_coord.earth_location.lon.deg],
         lats=[pymsis_coord.earth_location.lat.deg],
-        alts=[pymsis_coord.earth_location.height.to(u.km).value])
-
+        alts=[pymsis_coord.earth_location.height.to(u.km).value],
+        f107s=[F107_ASSUMED],
+        f107as=[F107A_ASSUMED],
+        aps=[[AP_ASSUMED] * 7])
+ 
     n_AO = result[0, 3]
 
     # FIX: Use local atmospheric temperature from MSIS output (column index 10)
