@@ -1,5 +1,30 @@
-#Disclaimer: AI was used to debug and interpret syntax
-#All methods used were researched thoroughly by the creator.
+"""
+VLEO Atomix Oxygen Fluence Model 
+Created by Pratyush Majumdar for WolfSat-2
+
+Date: May 14 - June 20th.
+
+This is a python representation of an atomic oxygen fluence model, following the process described in this paper: https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2020JA027944
+Immense credit to the authors G. Schumm, J. W. Bonnell, J. R. Wygant, and F. S. Mozer, because this model would not have been possible without this document.
+
+This model approximates oxygen particle collisions through a process of summing vectors and coordinate transformations that creates what would happen if gas particles impacted an ideal surface at different orientations.
+This model uses:
+
+ -- NRLMSIS Data
+ -- Rodrigues's Rotation Formula
+ -- Astropy and Poliastro for orbit propogation
+ -- A stand in date for the actual WS-2 launch date, as the true date does not have any atmospheric data for it. 
+
+Mission:
+The Wolfsat-2 is is a 1U CubeSat mission designed to test the viability of using a wood chassis rather than the usual metal.
+It operates in a very low Earth orbit (~230 km). The orbit is effectively circular for atmospheric purposes.
+This model estimates the RPM as constant.
+
+- All physics equations, logic, and modeling were developed (or researched) by the author.
+- Artificial Intelligience was used in order to debug and fix errors in the code.
+- The simulation is intended for early-phase atomic oxygen analysis of Wolfsat-2.
+
+"""
 
 from astropy import units as u
 from poliastro.bodies import Earth, Sun
@@ -108,7 +133,7 @@ for coord in gcrs_coords:
 # From my reference article: "However, the magnitude of the wind velocity is small in comparison to the other velocities in play (on theorder of 0.1 km/s), and thus only a marginally affects the magnitude of atomic oxygen flux"
 #So we will NOT try to incorporate it
 
-#Create the spin axis vector. We should simulate two cases: 1) Uniform Flux or 2) Maximum Erosion
+#Create the spin axis vector. We should simulate two cases: 1) Uniform Flux or 2) Maximum Erosion. Case 1 is the more practical case to simulate. 
 
 #CASE 1: Uniform Flux. For this, we must set up the spin axis vector such that 4 sides of the cube rotate a la spit roast style into the ram direction where particles impact from.
 
@@ -127,13 +152,6 @@ magnitudes = np.linalg.norm(orbit_normal_vector_GCRS, axis=1, keepdims=True)
 # Normalization is important because it removes all information about magnitude. We do not care about magnitude; we only care for how the direction between the spin axis and ram direction matters.
 
 spin_axis_GCRS_array_CASE1 = orbit_normal_vector_GCRS / magnitudes
-
-
-#CASE 2: Maximum Erosion. For this, we must set up the spin axis vector to always point in the same direction as the velocity vector (spinning like a bullet, so to speak), so one face is constantly in the ram direction and receiving the maximum AO Flux.
-
-velocity_magnitudes = np.linalg.norm(v_GCRS_array, axis=1, keepdims=True)
-
-spin_axis_GCRS_array_CASE2 = v_GCRS_array / velocity_magnitudes
 
 # Computing atmospheric corotational velocity. It is rather simple, as vco is simply = Earth spin vector (w_Earth) crossed with r of the spacecraft, in GCRS coords
 
