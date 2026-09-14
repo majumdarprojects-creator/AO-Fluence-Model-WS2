@@ -1,9 +1,11 @@
 # AO-Fluence-Model-WS2
 
-VLEO Atomix Oxygen Fluence Model 
+VLEO Atomic Oxygen Fluence Model 
 Created by Pratyush Majumdar for WolfSat-2
 
 Date: May 14 - June 20th.
+
+Atomic oxygen is a single, unpaired Oxygen atom that is extremely unstable and reactive. It is well documented to cause fast oxidation of spacecraft surfaces, especially in VLEO and LEO orbit environments, where it is in exponentially greater quantities than those of higher altitudes.
 
 This is a python representation of an atomic oxygen fluence model, following the process described in this paper: https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2020JA027944
 Immense credit to the authors G. Schumm, J. W. Bonnell, J. R. Wygant, and F. S. Mozer, because this model would not have been possible without this document.
