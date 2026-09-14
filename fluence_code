@@ -45,7 +45,7 @@ from pymsis import msis
 import matplotlib.pyplot as plt
 
 
-#WS-2 launches later than this, but databses quite literally do not have the data for our actual launch date. This is a stand in launch date.
+#This is a stand in launch date. Using the true launch, which is later than this, may result in avging of means, which may swing values.
 epoch = Time("2025-12-01 00:00:00", scale="utc")
 
 # Orbital Parameters.
@@ -111,8 +111,6 @@ for s, t in zip(states, times_time):
     gcrs_coords.append(coord)
 
 #Append tags on each measured position state to gcrs_coords, creating a gradually growing list.
-#This is necessary because I do not think is there is a closed form function for position in this usage.
-
 
 #Conversion to GEO coordinate system, but again this paper is somewhat old, so our modern equivalent is ITRS coords
 
@@ -149,7 +147,7 @@ orbit_normal_vector_GCRS = np.cross(r_GCRS_array, v_GCRS_array)
 magnitudes = np.linalg.norm(orbit_normal_vector_GCRS, axis=1, keepdims=True)
 
 # normalized spin/orbit axis
-# Normalization is important because it removes all information about magnitude. We do not care about magnitude; we only care for how the direction between the spin axis and ram direction matters.
+# Normalization is important because it removes all information about magnitude (by reducing it to 1). We do not care about magnitude; we only care for how the direction between the spin axis and ram direction matters.
 
 spin_axis_GCRS_array_CASE1 = orbit_normal_vector_GCRS / magnitudes
 
@@ -273,10 +271,9 @@ for i in range(len(times)):
     v_drift_rotated_CASE1.append(v_drift_rot)
 
 #Calculation of ram velocity as per equations 11-14.
-# FIX: v_ram and s_parameter are now computed per-step inside the flux loop below,
+# FIX: v_ram and s_parameter are now computed inside the flux loop,
 # using the local atmospheric temperature from MSIS at each orbital position.
-# Computing them once from a fixed T_perigee (as done previously) does not capture
-# the variation in thermal speed across the orbit (Section 2.1, Step 9 of paper).
+# Computing them once from a fixed T_perigee doesn't caputre variation in thermal speed across the orbit (Section 2.1, Step 9 of paper).
 
 n_AO_list = []
 v_normal_list = []
@@ -292,13 +289,7 @@ for i in range(len(times)):
     # FIX: f107/f107a/ap are pinned explicitly rather than relying on pymsis's
     # auto-download. The epoch (2027-12-01) is a future/synthetic date relative
     # to CelesTrak's observed F10.7/Ap archive, so auto-download has no real
-    # observation to return and may silently fall back to climatological
-    # defaults or an unrelated cached value -- either of which can swing the
-    # AO density (and hence fluence) by a large factor, since AO production
-    # scales strongly with solar activity (paper Section 3.1.1).
-    # Values below correspond to moderate solar activity (F10.7 ~ 150 sfu,
-    # Ap ~ 15) -- adjust to whatever scenario you intend to model
-    # (e.g. solar min ~70, solar max ~200+).
+    # observation to return and may do silent means, possibly swinging data, which I'd rather have control over.
     F107_ASSUMED = 150.0
     F107A_ASSUMED = 150.0
     AP_ASSUMED = 15.0
